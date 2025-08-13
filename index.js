@@ -1,12 +1,11 @@
 import express from 'express';
-import { GoogleGenAI } from '@google/generative-ai';
+// Change the import to the new package name
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// 1. Initialize Express and GoogleGenAI
+// 1. Initialize Express and GoogleGenerativeAI
 const app = express();
-// Railway provides the PORT env var
 const port = process.env.PORT || 3000;
-// Railway will provide the GEMINI_API_KEY
-const ai = new GoogleGenAI(process.env.GEMINI_API_KEY);
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY); // API key from Railway secrets
 
 // 2. Middleware to parse JSON requests
 app.use(express.json());
@@ -20,11 +19,15 @@ app.post('/prompt', async (req, res) => {
       return res.status(400).json({ error: 'Prompt is required' });
     }
 
-    const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // Get the generative model
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+
+    // Generate content
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
 
+    // Send the AI's response back
     res.json({ response: text });
 
   } catch (error) {
