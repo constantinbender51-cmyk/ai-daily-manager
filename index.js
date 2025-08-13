@@ -3,52 +3,46 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pg from 'pg';
-import fs from 'fs/promises'; // **STEP 1: IMPORT THE FILE SYSTEM MODULE**
+import fs from 'fs/promises';
 
 // --- Basic Setup ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
 const port = process.env.PORT || 3000;
-const scheduleFilePath = path.join(__dirname, 'schedule.json'); // Path to our new file
+const scheduleFilePath = path.join(__dirname, 'schedule.json');
 
-// --- AI Persona Definition ---
-const systemPrompt = `You are a highly efficient personal assistant...`; // Unchanged for now
+// --- AI Persona Definition (NEW VERSION) ---
+const systemPrompt = `
+    You are a hyper-efficient scheduling assistant. Your entire world is a single JSON file that represents the user's schedule.
+    Your primary function is to manage this schedule file.
 
-// --- Database Setup ---
+    **RULES:**
+    1.  **Analyze User Intent:** When the user sends a prompt, determine if they want to READ the schedule, ADD a task, UPDATE a task, or REMOVE a task.
+    2.  **READ Operations:** If the user asks what's on their schedule, summarize the contents of the JSON schedule provided to you. Do NOT add, update, or remove anything.
+    3.  **WRITE Operations (ADD/UPDATE/REMOVE):** If the user wants to change the schedule, your ONLY output should be the **complete, updated JSON array** of schedule items. Do not include any other text, explanations, or markdown. Just the raw JSON.
+        - For ADD operations, add a new object to the array. A new task must have an 'id' (a unique number), 'task' (description), 'startTime' (in ISO 8601 format, e.g., 2025-08-13T14:00:00Z), and a 'status' of 'pending'.
+        - For UPDATE operations, modify the existing item in the array.
+        - For REMOVE operations, delete the item from the array.
+    4.  **Conversation:** If the user is just chatting (e.g., "hello"), respond conversationally without modifying the schedule.
+`;
+
+// --- Database & File System Functions (Unchanged) ---
 if (!process.env.DATABASE_URL) { /* ... */ }
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 async function setupDatabase() { /* ... */ }
-
-// **STEP 2: ADD HELPER FUNCTIONS FOR READING/WRITING THE SCHEDULE**
-
-/**
- * Reads and parses the schedule.json file.
- * @returns {Promise<Array>} A promise that resolves to the array of tasks.
- */
 async function readSchedule() {
     try {
         const data = await fs.readFile(scheduleFilePath, 'utf8');
-        return JSON.parse(data); // Convert the file content from text to a JSON object
+        return JSON.parse(data);
     } catch (error) {
-        // If the file doesn't exist or is empty, it's not an error, just return an empty schedule.
-        if (error.code === 'ENOENT') {
-            return [];
-        }
-        // For other errors, log them.
+        if (error.code === 'ENOENT') return [];
         console.error("Error reading schedule file:", error);
-        return []; // Return empty array on error
+        return [];
     }
 }
-
-/**
- * Writes an array of tasks to the schedule.json file.
- * @param {Array} data The array of tasks to write.
- * @returns {Promise<void>}
- */
 async function writeSchedule(data) {
     try {
-        // Convert the JSON object to a nicely formatted string with 2-space indentation
         const jsonString = JSON.stringify(data, null, 2);
         await fs.writeFile(scheduleFilePath, jsonString, 'utf8');
     } catch (error) {
@@ -56,24 +50,76 @@ async function writeSchedule(data) {
     }
 }
 
-
 // --- AI and Express Middleware ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 app.use(express.json());
 
 // --- API Endpoints ---
-// (All endpoints like /history and /prompt remain unchanged for now)
-app.get('/history', async (req, res) => { /* ... */ });
-app.post('/prompt', async (req, res) => { /* ... */ });
+app.get('/history', async (req, res) => { /* ... (unchanged) */ });
 
+// **MODIFIED /prompt ENDPOINT**
+app.post('/prompt', async (req, res) => {
+    const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
-// --- Frontend Routes ---
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    let client;
+    try {
+        client = await pool.connect();
+        // 1. Save user prompt to conversation history (for context)
+        await client.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['user', prompt]);
+
+        // 2. Read the current schedule from the file
+        const currentSchedule = await readSchedule();
+        const scheduleAsText = JSON.stringify(currentSchedule, null, 2);
+
+        // 3. Construct the prompt for the AI, including the current schedule
+        const promptForAI = `
+            This is the current schedule:
+            ${scheduleAsText}
+
+            User's request: "${prompt}"
+
+            Now, follow your rules precisely.
+        `;
+
+        // 4. Interact with Gemini
+        const model = genAI.getGenerativeModel({
+            model: "gemini-1.5-flash",
+            systemInstruction: systemPrompt,
+        });
+        const result = await model.generateContent(promptForAI);
+        const response = await result.response;
+        let aiText = response.text();
+
+        // 5. Check if the AI's response is a new schedule
+        try {
+            // A simple check: if the response starts with '[' and ends with ']', it's likely a JSON array.
+            const cleanedText = aiText.trim();
+            if (cleanedText.startsWith('[') && cleanedText.endsWith(']')) {
+                const newSchedule = JSON.parse(cleanedText);
+                await writeSchedule(newSchedule); // Write the new schedule to the file
+                console.log("AI provided a new schedule. File updated.");
+                // Provide a user-friendly confirmation message instead of showing the raw JSON.
+                aiText = "I have updated the schedule as requested.";
+            }
+        } catch (e) {
+            // The AI's response was not valid JSON, so we treat it as a regular chat message.
+            console.log("AI response was not a schedule update. Treating as a chat message.");
+        }
+
+        // 6. Save the final AI response to conversation history
+        await client.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['model', aiText]);
+
+        res.json({ response: aiText });
+
+    } catch (error) {
+        console.error('Error processing prompt:', error);
+        res.status(500).json({ error: 'Failed to process request' });
+    } finally {
+        if (client) client.release();
+    }
 });
 
-// --- Start Server ---
-app.listen(port, async () => {
-    console.log(`Server is listening on port ${port}`);
-    await setupDatabase();
-});
+// --- Frontend Routes & Server Start (Unchanged) ---
+app.get('/', (req, res) => { /* ... */ });
+app.listen(port, async () => { /* ... */ });
