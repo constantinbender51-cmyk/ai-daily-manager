@@ -2,7 +2,7 @@ import express from 'express';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import pg from 'pg'; // Import the pg library
+import pg from 'pg';
 
 // --- Basic Setup ---
 const __filename = fileURLToPath(import.meta.url);
@@ -12,18 +12,23 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 // --- Database Setup ---
-// Railway provides the DATABASE_URL automatically
+// **FIX 1: Add a check for the DATABASE_URL**
+if (!process.env.DATABASE_URL) {
+    console.error("FATAL: DATABASE_URL environment variable is not set.");
+    process.exit(1); // Exit the application if the database URL is not found
+}
+
 const pool = new pg.Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false // Required for Railway connections
-    }
+    // **FIX 2: Railway's PostgreSQL does not require SSL for internal connections**
+    // We can remove the SSL config block as Railway handles it.
+    // If you were connecting from an external machine, you would need it.
 });
 
-// Function to create the database table if it doesn't exist
 async function setupDatabase() {
-    const client = await pool.connect();
+    let client; // Define client outside the try block
     try {
+        client = await pool.connect();
         await client.query(`
             CREATE TABLE IF NOT EXISTS conversations (
                 id SERIAL PRIMARY KEY,
@@ -35,8 +40,12 @@ async function setupDatabase() {
         console.log('Database table "conversations" is ready.');
     } catch (err) {
         console.error('Error setting up database table:', err);
+        // If setup fails, we should probably exit to avoid running in a broken state.
+        process.exit(1);
     } finally {
-        client.release();
+        if (client) {
+            client.release(); // Ensure client is released only if it was connected
+        }
     }
 }
 
@@ -51,28 +60,27 @@ app.post('/prompt', async (req, res) => {
         return res.status(400).json({ error: 'Prompt is required' });
     }
 
-    const client = await pool.connect();
+    let client;
     try {
-        // 1. Load recent conversation history from DB
+        client = await pool.connect();
         const historyResult = await client.query(
-            'SELECT role, content FROM conversations ORDER BY created_at DESC LIMIT 20'
+            'SELECT role, content as text FROM conversations ORDER BY created_at DESC LIMIT 20'
         );
+            
+        // The Gemini API expects roles as 'user' and 'model'. Let's format the history.
         const history = historyResult.rows.reverse().map(row => ({
             role: row.role,
-            parts: [{ text: row.content }]
+            parts: [{ text: row.text }]
         }));
 
-        // 2. Save the new user prompt to the DB
         await client.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['user', prompt]);
 
-        // 3. Interact with Gemini, providing the history
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const chat = model.startChat({ history: history });
         const result = await chat.sendMessage(prompt);
         const response = await result.response;
         const aiText = response.text();
 
-        // 4. Save the AI's response to the DB
         await client.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['model', aiText]);
 
         res.json({ response: aiText });
@@ -81,7 +89,9 @@ app.post('/prompt', async (req, res) => {
         console.error('Error processing prompt with memory:', error);
         res.status(500).json({ error: 'Failed to process request' });
     } finally {
-        client.release();
+        if (client) {
+            client.release();
+        }
     }
 });
 
@@ -91,8 +101,10 @@ app.get('/', (req, res) => {
 });
 
 // --- Start Server ---
-app.listen(port, () => {
+// **FIX 3: Move the database setup to be called AFTER the server starts listening.**
+// This gives Railway time to inject the environment variables properly.
+app.listen(port, async () => {
     console.log(`Server is listening on port ${port}`);
-    // Set up the database table when the server starts
-    setupDatabase();
+    // Now that the server is running, set up the database.
+    await setupDatabase();
 });
