@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Assistant</title>
+    <style>
+        /* Basic Styling for the Interface */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f0f2f5;
+            color: #1c1e21;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        header {
+            background-color: #ffffff;
+            padding: 1rem;
+            border-bottom: 1px solid #dddfe2;
+            text-align: center;
+        }
+        main {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            padding: 1rem;
+        }
+        #info-display {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            border: 1px solid #dddfe2;
+        }
+        #chat-history {
+            flex-grow: 1;
+        }
+        .message {
+            padding: 0.75rem 1rem;
+            border-radius: 18px;
+            margin-bottom: 0.5rem;
+            max-width: 80%;
+            line-height: 1.4;
+        }
+        .user-message {
+            background-color: #0084ff;
+            color: white;
+            align-self: flex-end;
+            margin-left: auto;
+        }
+        .ai-message {
+            background-color: #e4e6eb;
+            color: #050505;
+            align-self: flex-start;
+        }
+        form {
+            display: flex;
+            padding: 1rem;
+            background-color: #ffffff;
+            border-top: 1px solid #dddfe2;
+        }
+        input {
+            flex-grow: 1;
+            border: 1px solid #ccc;
+            border-radius: 18px;
+            padding: 0.75rem;
+            font-size: 1rem;
+        }
+        button {
+            background-color: #0084ff;
+            color: white;
+            border: none;
+            border-radius: 18px;
+            padding: 0.75rem 1.5rem;
+            margin-left: 0.5rem;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>AI Assistant</h1>
+    </header>
+
+    <main>
+        <!-- This section will display the schedule -->
+        <div id="info-display">
+            <h2>Today's Schedule</h2>
+            <p id="schedule-content">Loading schedule...</p>
+        </div>
+
+        <!-- This section will show the conversation -->
+        <div id="chat-history"></div>
+    </main>
+
+    <!-- The form for sending messages -->
+    <form id="prompt-form">
+        <input type="text" id="prompt-input" placeholder="Ask your assistant..." autocomplete="off">
+        <button type="submit">Send</button>
+    </form>
+
+    <script>
+        // Get references to the HTML elements
+        const form = document.getElementById('prompt-form');
+        const input = document.getElementById('prompt-input');
+        const chatHistory = document.getElementById('chat-history');
+        const scheduleContent = document.getElementById('schedule-content');
+
+        // Function to add a message to the chat history
+        function addMessage(text, sender) {
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', `${sender}-message`);
+            messageDiv.textContent = text;
+            chatHistory.appendChild(messageDiv);
+            // Scroll to the bottom
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+
+        // Function to update the schedule display
+        function updateSchedule(text) {
+            scheduleContent.textContent = text;
+        }
+
+        // Handle form submission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const userPrompt = input.value.trim();
+            if (!userPrompt) return;
+
+            addMessage(userPrompt, 'user');
+            input.value = ''; // Clear the input field
+
+            try {
+                // Send the prompt to our Railway server
+                const response = await fetch('/prompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: userPrompt })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! Status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                addMessage(data.response, 'ai');
+
+            } catch (error) {
+                console.error('Error sending prompt:', error);
+                addMessage('Sorry, I had trouble connecting to my brain. Please try again.', 'ai');
+            }
+        });
+
+        // Initial prompt to get the day's schedule when the page loads
+        async function getInitialInfo() {
+            try {
+                const initialPrompt = "Please summarize my schedule for today and provide any other relevant information in a concise paragraph.";
+                const response = await fetch('/prompt', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: initialPrompt })
+                });
+
+                if (!response.ok) throw new Error('Failed to fetch initial info');
+
+                const data = await response.json();
+                updateSchedule(data.response);
+
+            } catch (error) {
+                console.error('Error fetching initial info:', error);
+                updateSchedule('Could not load schedule. The AI assistant might be offline.');
+            }
+        }
+
+        // Load the schedule when the page is ready
+        document.addEventListener('DOMContentLoaded', getInitialInfo);
+    </script>
+
+</body>
+</html>
