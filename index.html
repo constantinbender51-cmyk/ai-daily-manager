@@ -157,25 +157,36 @@
         });
 
         // Initial prompt to get the day's schedule when the page loads
-        async function getInitialInfo() {
-            try {
-                const initialPrompt = "Please summarize my schedule for today and provide any other relevant information in a concise paragraph.";
-                const response = await fetch('/prompt', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: initialPrompt })
-                });
+async function getInitialInfo() {
+    try {
+        // A more natural starting prompt
+        const initialPrompt = "Good morning. What's on my schedule for today?";
+            
+        // Add the prompt to the UI so the user sees it
+        addMessage(initialPrompt, 'user');
+        updateSchedule('Checking schedule...'); // Give feedback
 
-                if (!response.ok) throw new Error('Failed to fetch initial info');
+        const response = await fetch('/prompt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: initialPrompt })
+        });
 
-                const data = await response.json();
-                updateSchedule(data.response);
+        if (!response.ok) throw new Error('Failed to fetch initial info');
 
-            } catch (error) {
-                console.error('Error fetching initial info:', error);
-                updateSchedule('Could not load schedule. The AI assistant might be offline.');
-            }
-        }
+        const data = await response.json();
+        // The main info display and chat history can be the same for now
+        addMessage(data.response, 'ai');
+        updateSchedule("Here is the latest information.");
+
+    } catch (error) {
+        console.error('Error fetching initial info:', error);
+        const errorMessage = 'Could not load schedule. The AI assistant might be offline.';
+        addMessage(errorMessage, 'ai');
+        updateSchedule(errorMessage);
+    }
+}
+
 
         // Load the schedule when the page is ready
         document.addEventListener('DOMContentLoaded', getInitialInfo);
