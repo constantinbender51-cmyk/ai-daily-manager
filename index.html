@@ -20,6 +20,7 @@
             padding: 1rem;
             border-bottom: 1px solid #dddfe2;
             text-align: center;
+            flex-shrink: 0;
         }
         main {
             flex-grow: 1;
@@ -34,9 +35,12 @@
             padding: 1rem;
             margin-bottom: 1rem;
             border: 1px solid #dddfe2;
+            flex-shrink: 0;
         }
         #chat-history {
             flex-grow: 1;
+            display: flex;
+            flex-direction: column;
         }
         .message {
             padding: 0.75rem 1rem;
@@ -44,6 +48,7 @@
             margin-bottom: 0.5rem;
             max-width: 80%;
             line-height: 1.4;
+            word-wrap: break-word;
         }
         .user-message {
             background-color: #0084ff;
@@ -51,7 +56,8 @@
             align-self: flex-end;
             margin-left: auto;
         }
-        .ai-message {
+        /* Renamed to 'model-message' to match DB role */
+        .model-message {
             background-color: #e4e6eb;
             color: #050505;
             align-self: flex-start;
@@ -61,6 +67,7 @@
             padding: 1rem;
             background-color: #ffffff;
             border-top: 1px solid #dddfe2;
+            flex-shrink: 0;
         }
         input {
             flex-grow: 1;
@@ -88,17 +95,14 @@
     </header>
 
     <main>
-        <!-- This section will display the schedule -->
         <div id="info-display">
-            <h2>Today's Schedule</h2>
-            <p id="schedule-content">Loading schedule...</p>
+            <h2 id="info-title">Status</h2>
+            <p id="info-content">Loading history...</p>
         </div>
-
-        <!-- This section will show the conversation -->
         <div id="chat-history"></div>
     </main>
 
-    <!-- The form for sending messages -->
+    <!-- THIS IS THE FORM THAT WAS MISSING -->
     <form id="prompt-form">
         <input type="text" id="prompt-input" placeholder="Ask your assistant..." autocomplete="off">
         <button type="submit">Send</button>
@@ -109,21 +113,16 @@
         const form = document.getElementById('prompt-form');
         const input = document.getElementById('prompt-input');
         const chatHistory = document.getElementById('chat-history');
-        const scheduleContent = document.getElementById('schedule-content');
+        const infoContent = document.getElementById('info-content');
 
         // Function to add a message to the chat history
         function addMessage(text, sender) {
             const messageDiv = document.createElement('div');
-            messageDiv.classList.add('message', `${sender}-message`);
-            messageDiv.textContent = text;
+            const senderClass = sender === 'ai' ? 'model' : sender;
+            messageDiv.classList.add('message', `${senderClass}-message`);
+            messageDiv.innerHTML = text.replace(/\n/g, '<br>');
             chatHistory.appendChild(messageDiv);
-            // Scroll to the bottom
             chatHistory.scrollTop = chatHistory.scrollHeight;
-        }
-
-        // Function to update the schedule display
-        function updateSchedule(text) {
-            scheduleContent.textContent = text;
         }
 
         // Handle form submission
@@ -133,63 +132,53 @@
             if (!userPrompt) return;
 
             addMessage(userPrompt, 'user');
-            input.value = ''; // Clear the input field
+            input.value = '';
 
             try {
-                // Send the prompt to our Railway server
                 const response = await fetch('/prompt', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ prompt: userPrompt })
                 });
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! Status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
 
                 const data = await response.json();
                 addMessage(data.response, 'ai');
 
             } catch (error) {
                 console.error('Error sending prompt:', error);
-                addMessage('Sorry, I had trouble connecting to my brain. Please try again.', 'ai');
+                addMessage('Sorry, I had trouble connecting. Please try again.', 'ai');
             }
         });
 
-        // Initial prompt to get the day's schedule when the page loads
-async function getInitialInfo() {
-    try {
-        // A more natural starting prompt
-        const initialPrompt = "Good morning. What's on my schedule for today?";
-            
-        // Add the prompt to the UI so the user sees it
-        addMessage(initialPrompt, 'user');
-        updateSchedule('Checking schedule...'); // Give feedback
+        // Function to load history
+        async function loadHistory() {
+            try {
+                const response = await fetch('/history');
+                if (!response.ok) throw new Error('Failed to fetch history');
+                    
+                const messages = await response.json();
+                chatHistory.innerHTML = ''; 
+                    
+                messages.forEach(msg => {
+                    addMessage(msg.content, msg.role === 'model' ? 'ai' : 'user');
+                });
 
-        const response = await fetch('/prompt', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt: initialPrompt })
-        });
+                if (messages.length > 0) {
+                    infoContent.textContent = "Here is our conversation history.";
+                } else {
+                    infoContent.textContent = "Welcome! Ask me to add something to your schedule.";
+                }
 
-        if (!response.ok) throw new Error('Failed to fetch initial info');
+            } catch (error) {
+                console.error('Error loading history:', error);
+                infoContent.textContent = "Could not load history.";
+            }
+        }
 
-        const data = await response.json();
-        // The main info display and chat history can be the same for now
-        addMessage(data.response, 'ai');
-        updateSchedule("Here is the latest information.");
-
-    } catch (error) {
-        console.error('Error fetching initial info:', error);
-        const errorMessage = 'Could not load schedule. The AI assistant might be offline.';
-        addMessage(errorMessage, 'ai');
-        updateSchedule(errorMessage);
-    }
-}
-
-
-        // Load the schedule when the page is ready
-        document.addEventListener('DOMContentLoaded', getInitialInfo);
+        // Load the history when the page is ready
+        document.addEventListener('DOMContentLoaded', loadHistory);
     </script>
 
 </body>
