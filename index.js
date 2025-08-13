@@ -30,6 +30,7 @@ if (!process.env.DATABASE_URL) {
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
 async function setupDatabase() {
+    // ... (database setup code is unchanged)
     let client;
     try {
         client = await pool.connect();
@@ -54,8 +55,25 @@ async function setupDatabase() {
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 app.use(express.json());
 
-// --- API Endpoint (with System Prompt) ---
+// --- API Endpoints ---
+
+// **NEW ENDPOINT TO GET CHAT HISTORY**
+app.get('/history', async (req, res) => {
+    let client;
+    try {
+        client = await pool.connect();
+        const result = await client.query('SELECT role, content FROM conversations ORDER BY created_at ASC');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Error fetching history:', error);
+        res.status(500).json({ error: 'Failed to fetch history' });
+    } finally {
+        if (client) client.release();
+    }
+});
+
 app.post('/prompt', async (req, res) => {
+    // ... (prompt endpoint code is unchanged)
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
@@ -74,7 +92,6 @@ app.post('/prompt', async (req, res) => {
 
         const model = genAI.getGenerativeModel({
             model: "gemini-1.5-flash",
-            // Add the system instruction here!
             systemInstruction: systemPrompt,
         });
 
