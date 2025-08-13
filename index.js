@@ -39,34 +39,42 @@ app.post('/prompt', async (req, res) => {
         client = await pool.connect();
         await client.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['user', prompt]);
 
-        // 1. Read the current schedule
         const currentSchedule = await readSchedule();
         const scheduleAsText = JSON.stringify(currentSchedule, null, 2);
-
-        // 2. Construct a context message for the AI
         const contextMessage = `This is the current schedule: ${scheduleAsText}. Now, process the following user request: "${prompt}"`;
 
-        // 3. Get conversation history (for conversational context)
         const historyResult = await client.query(
             'SELECT role, content as text FROM conversations ORDER BY created_at DESC LIMIT 10'
         );
-        const history = historyResult.rows.reverse().map(row => ({
+        let history = historyResult.rows.reverse().map(row => ({
             role: row.role,
             parts: [{ text: row.text }]
         }));
 
-        // 4. Interact with Gemini
+        // =================================================================
+        // **THE FIX: Ensure the history starts with a 'user' role.**
+        // Find the index of the first 'user' message.
+        const firstUserIndex = history.findIndex(msg => msg.role === 'user');
+
+        // If a 'user' message is found, slice the array from that point.
+        // Otherwise, start with an empty history to avoid the error.
+        if (firstUserIndex > -1) {
+            history = history.slice(firstUserIndex);
+        } else {
+            history = [];
+        }
+        // =================================================================
+
         const model = genAI.getGenerativeModel({
             model: "gemini-1.5-flash",
             systemInstruction: { parts: [{ text: systemPrompt }] },
         });
 
         const chat = model.startChat({ history: history });
-        const result = await chat.sendMessage(contextMessage); // Send the combined context and prompt
+        const result = await chat.sendMessage(contextMessage);
         const response = await result.response;
         let aiText = response.text();
 
-        // 5. Check if the AI's response is a new schedule
         try {
             const cleanedText = aiText.trim();
             if (cleanedText.startsWith('[') && cleanedText.endsWith(']')) {
@@ -79,7 +87,6 @@ app.post('/prompt', async (req, res) => {
             console.log("AI response was not a schedule update. Treating as a chat message.");
         }
 
-        // 6. Save the final AI response to conversation history
         await client.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['model', aiText]);
 
         res.json({ response: aiText });
@@ -92,7 +99,6 @@ app.post('/prompt', async (req, res) => {
     }
 });
 
-// --- Frontend Route & Server Start (Unchanged) ---
 app.get('/', (req, res) => { res.sendFile(path.join(__dirname, 'index.html')); });
 app.listen(port, async () => {
     console.log(`Server is listening on port ${port}.`);
