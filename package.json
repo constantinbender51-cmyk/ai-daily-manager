@@ -9,6 +9,6 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "@google/genai": "^0.14.0"
+    "@google/generative-ai": "^0.7.0"
   }
 }
