@@ -7,26 +7,30 @@ import pg from 'pg';
 // --- Basic Setup ---
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
 const app = express();
 const port = process.env.PORT || 3000;
 
+// --- AI Persona Definition ---
+const systemPrompt = `
+    You are a highly efficient personal assistant. Your primary goal is to help me manage my daily activities.
+    Key responsibilities:
+    1.  Create, display, and adjust my daily schedule based on my requests.
+    2.  When I ask for my schedule, present it in a clear, easy-to-read format (like a list).
+    3.  Remember all our previous conversations to maintain context about my tasks and appointments.
+    4.  If I ask you to add something to the schedule, confirm that you have added it.
+    5.  Be proactive. For example, if I add a meeting, you can ask if I need a reminder.
+    Your tone should be professional, concise, and helpful.
+`;
+
 // --- Database Setup ---
-// **FIX 1: Add a check for the DATABASE_URL**
 if (!process.env.DATABASE_URL) {
     console.error("FATAL: DATABASE_URL environment variable is not set.");
-    process.exit(1); // Exit the application if the database URL is not found
+    process.exit(1);
 }
-
-const pool = new pg.Pool({
-    connectionString: process.env.DATABASE_URL,
-    // **FIX 2: Railway's PostgreSQL does not require SSL for internal connections**
-    // We can remove the SSL config block as Railway handles it.
-    // If you were connecting from an external machine, you would need it.
-});
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
 async function setupDatabase() {
-    let client; // Define client outside the try block
+    let client;
     try {
         client = await pool.connect();
         await client.query(`
@@ -40,12 +44,9 @@ async function setupDatabase() {
         console.log('Database table "conversations" is ready.');
     } catch (err) {
         console.error('Error setting up database table:', err);
-        // If setup fails, we should probably exit to avoid running in a broken state.
         process.exit(1);
     } finally {
-        if (client) {
-            client.release(); // Ensure client is released only if it was connected
-        }
+        if (client) client.release();
     }
 }
 
@@ -53,12 +54,10 @@ async function setupDatabase() {
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 app.use(express.json());
 
-// --- API Endpoint (with Memory) ---
+// --- API Endpoint (with System Prompt) ---
 app.post('/prompt', async (req, res) => {
     const { prompt } = req.body;
-    if (!prompt) {
-        return res.status(400).json({ error: 'Prompt is required' });
-    }
+    if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
     let client;
     try {
@@ -66,8 +65,6 @@ app.post('/prompt', async (req, res) => {
         const historyResult = await client.query(
             'SELECT role, content as text FROM conversations ORDER BY created_at DESC LIMIT 20'
         );
-            
-        // The Gemini API expects roles as 'user' and 'model'. Let's format the history.
         const history = historyResult.rows.reverse().map(row => ({
             role: row.role,
             parts: [{ text: row.text }]
@@ -75,7 +72,12 @@ app.post('/prompt', async (req, res) => {
 
         await client.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['user', prompt]);
 
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const model = genAI.getGenerativeModel({
+            model: "gemini-1.5-flash",
+            // Add the system instruction here!
+            systemInstruction: systemPrompt,
+        });
+
         const chat = model.startChat({ history: history });
         const result = await chat.sendMessage(prompt);
         const response = await result.response;
@@ -84,14 +86,11 @@ app.post('/prompt', async (req, res) => {
         await client.query('INSERT INTO conversations (role, content) VALUES ($1, $2)', ['model', aiText]);
 
         res.json({ response: aiText });
-
     } catch (error) {
         console.error('Error processing prompt with memory:', error);
         res.status(500).json({ error: 'Failed to process request' });
     } finally {
-        if (client) {
-            client.release();
-        }
+        if (client) client.release();
     }
 });
 
@@ -101,10 +100,7 @@ app.get('/', (req, res) => {
 });
 
 // --- Start Server ---
-// **FIX 3: Move the database setup to be called AFTER the server starts listening.**
-// This gives Railway time to inject the environment variables properly.
 app.listen(port, async () => {
     console.log(`Server is listening on port ${port}`);
-    // Now that the server is running, set up the database.
     await setupDatabase();
 });
