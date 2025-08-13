@@ -1,0 +1,14 @@
+{
+  "name": "ai-daily-manager",
+  "version": "1.0.0",
+  "description": "AI assistant hosted on Railway",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "@google/genai": "^0.14.0"
+  }
+}
